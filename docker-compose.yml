@@ -1,0 +1,156 @@
+services:
+
+  # ============================================================
+  # PostgreSQL
+  # Airflow metadata database
+  # ============================================================
+  postgres:
+    image: postgres:16
+    container_name: etl_postgres
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    restart: unless-stopped
+
+
+  # ============================================================
+  # MySQL
+  # Destination database for the ETL
+  # ============================================================
+  mysql:
+    image: mysql:8.0
+    container_name: etl_mysql
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+
+    ports:
+      - "3307:3306"
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-uroot",
+          "-p${MYSQL_ROOT_PASSWORD}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+    restart: unless-stopped
+
+
+  # ============================================================
+  # SFTP Mock
+  # Simulates the remote source server
+  # ============================================================
+  sftp:
+    image: atmoz/sftp:latest
+    container_name: etl_sftp
+
+    ports:
+      - "${SFTP_PORT}:22"
+
+    volumes:
+      - ./data/sftp:/home/${SFTP_USER}/archivosVisitas
+
+    command: "${SFTP_USER}:${SFTP_PASSWORD}:1001"
+
+    restart: unless-stopped
+
+
+  # ============================================================
+  # Apache Airflow
+  # Local orchestration environment
+  # ============================================================
+  airflow:
+    image: apache/airflow:3.3.0
+    container_name: etl_airflow
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      mysql:
+        condition: service_healthy
+
+      sftp:
+        condition: service_started
+
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+        postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+
+      # Allows DAGs to import our Python package
+      PYTHONPATH: /opt/airflow/src
+
+      # Project environment
+      ETL_ENV: ${ETL_ENV}
+
+      # Local MySQL configuration
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+
+      # Local SFTP configuration
+      SFTP_HOST: sftp
+      SFTP_PORT: 22
+      SFTP_USER: ${SFTP_USER}
+      SFTP_PASSWORD: ${SFTP_PASSWORD}
+      SFTP_REMOTE_PATH: /home/${SFTP_USER}/archivosVisitas
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - ./config:/opt/airflow/config
+
+    command: standalone
+
+    restart: unless-stopped
+
+
+# ==============================================================
+# Persistent volumes
+# ==============================================================
+volumes:
+  postgres_data:
+  mysql_data:

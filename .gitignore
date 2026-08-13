@@ -1,0 +1,26 @@
+# Environment / secrets
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Airflow
+logs/*
+!logs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary ETL data
+data/staging/
+data/backup/
+
+# Operating system
+.DS_Store
+Thumbs.db
