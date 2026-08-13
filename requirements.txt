@@ -1,0 +1,7 @@
+SQLAlchemy
+PyMySQL
+paramiko
+PyYAML
+
+apache-airflow-providers-mysql
+apache-airflow-providers-sftp

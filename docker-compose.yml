@@ -93,9 +93,13 @@ services:
   # Local orchestration environment
   # ============================================================
   airflow:
-    image: apache/airflow:3.3.0
-    container_name: etl_airflow
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
 
+    image: etl-visitas-airflow:3.3.0
+    container_name: etl_airflow
+    
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +109,8 @@ services:
 
       sftp:
         condition: service_started
+      
+
 
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
@@ -131,7 +137,7 @@ services:
       SFTP_PORT: 22
       SFTP_USER: ${SFTP_USER}
       SFTP_PASSWORD: ${SFTP_PASSWORD}
-      SFTP_REMOTE_PATH: /home/${SFTP_USER}/archivosVisitas
+      SFTP_REMOTE_PATH: ${SFTP_REMOTE_PATH}
 
     ports:
       - "8080:8080"
@@ -142,6 +148,7 @@ services:
       - ./src:/opt/airflow/src
       - ./data:/opt/airflow/data
       - ./config:/opt/airflow/config
+      - ./scripts:/opt/airflow/scripts
 
     command: standalone
 
