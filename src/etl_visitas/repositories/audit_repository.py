@@ -333,3 +333,128 @@ class AuditRepository:
             return None
 
         return row["status"]
+
+    def update_run_metrics(
+        self,
+        run_id: str,
+        ) -> None:
+            sql = """
+            UPDATE etl_run_control run
+            JOIN (
+                SELECT
+                    run_id,
+
+                    COUNT(*) AS files_detected,
+
+                    SUM(
+                        CASE
+                            WHEN status IN (
+                                'PREPARED',
+                                'LOADED',
+                                'BACKED_UP',
+                                'SUCCESS',
+                                'REJECTED_LAYOUT',
+                                'FAILED'
+                            )
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS files_processed,
+
+                    SUM(
+                        CASE
+                            WHEN status = 'SUCCESS'
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS files_success,
+
+                    SUM(
+                        CASE
+                            WHEN status = 'REJECTED_LAYOUT'
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS files_rejected,
+
+                    SUM(
+                        CASE
+                            WHEN status = 'FAILED'
+                            THEN 1
+                            ELSE 0
+                        END
+                    ) AS files_failed,
+
+                    COALESCE(
+                        SUM(records_read),
+                        0
+                    ) AS records_read,
+
+                    COALESCE(
+                        SUM(records_valid),
+                        0
+                    ) AS records_valid,
+
+                    COALESCE(
+                        SUM(records_invalid),
+                        0
+                    ) AS records_invalid,
+
+                    COALESCE(
+                        SUM(records_loaded),
+                        0
+                    ) AS records_loaded
+
+                FROM etl_file_control
+                WHERE run_id = %s
+                GROUP BY run_id
+            ) metrics
+                ON run.run_id = metrics.run_id
+
+            SET
+                run.files_detected =
+                    metrics.files_detected,
+
+                run.files_processed =
+                    metrics.files_processed,
+
+                run.files_success =
+                    metrics.files_success,
+
+                run.files_rejected =
+                    metrics.files_rejected,
+
+                run.files_failed =
+                    metrics.files_failed,
+
+                run.records_read =
+                    metrics.records_read,
+
+                run.records_valid =
+                    metrics.records_valid,
+
+                run.records_invalid =
+                    metrics.records_invalid,
+
+                run.records_loaded =
+                    metrics.records_loaded
+
+            WHERE run.run_id = %s
+            """
+
+            with self._connection_factory.connection() as connection:
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            sql,
+                            (
+                                run_id,
+                                run_id,
+                            ),
+                        )
+
+                    connection.commit()
+
+                except Exception:
+                    connection.rollback()
+                    raise
