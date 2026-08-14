@@ -139,6 +139,8 @@ services:
       SFTP_PASSWORD: ${SFTP_PASSWORD}
       SFTP_REMOTE_PATH: ${SFTP_REMOTE_PATH}
 
+      ETL_STAGING_PATH: ${ETL_STAGING_PATH}
+
     ports:
       - "8080:8080"
 

@@ -21,10 +21,16 @@ class MySQLSettings:
 
 
 @dataclass(frozen=True)
+class StorageSettings:
+    staging_path: str
+
+
+@dataclass(frozen=True)
 class AppSettings:
     environment: str
     sftp: SFTPSettings
     mysql: MySQLSettings
+    storage: StorageSettings
 
 
 def load_settings() -> AppSettings:
@@ -43,5 +49,10 @@ def load_settings() -> AppSettings:
             database=os.environ["MYSQL_DATABASE"],
             username=os.environ["MYSQL_USER"],
             password=os.environ["MYSQL_PASSWORD"],
+        ),
+        storage=StorageSettings(
+            staging_path=os.environ[
+                "ETL_STAGING_PATH"
+            ],
         ),
     )

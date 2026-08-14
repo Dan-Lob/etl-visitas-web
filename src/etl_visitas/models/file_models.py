@@ -17,7 +17,8 @@ class StagedFile:
     file_name: str
     remote_path: str
     local_path: str
-    size_bytes: int
+    remote_size_bytes: int
+    local_size_bytes: int
     checksum_sha256: str
 
 
