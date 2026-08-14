@@ -22,6 +22,7 @@ class FileStatus(str, Enum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     SKIPPED_ALREADY_PROCESSED = "SKIPPED_ALREADY_PROCESSED"
+    PREPARED = "PREPARED"
 
 
 class ErrorCategory(str, Enum):
