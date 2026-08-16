@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
 from etl_visitas.config.settings import (
@@ -7,12 +7,15 @@ from etl_visitas.config.settings import (
 from etl_visitas.models.audit_models import (
     RunContext,
 )
+from etl_visitas.models.enums import (
+    ErrorCode,
+)
+from etl_visitas.models.file_models import (
+    RemoteFileMetadata,
+)
 from etl_visitas.models.record_models import (
     RecordError,
     VisitRecord,
-)
-from etl_visitas.models.enums import (
-    ErrorCode,
 )
 from etl_visitas.repositories.audit_repository import (
     AuditRepository,
@@ -29,27 +32,32 @@ from etl_visitas.services.load_service import (
 from etl_visitas.validation.record_processor import (
     RecordProcessingResult,
 )
-from etl_visitas.models.file_models import (
-    RemoteFileMetadata,
-)
 
 
 def test_load_valid_and_invalid_records():
     settings = load_settings()
 
-    factory = MySQLConnectionFactory(
-        settings.mysql
+    connection_factory = (
+        MySQLConnectionFactory(
+            settings.mysql
+        )
     )
 
-    audit = AuditRepository(factory)
+    audit_repository = AuditRepository(
+        connection_factory
+    )
 
     run_id = f"load_test_{uuid4()}"
+    unique_email = f"valid_{uuid4().hex}@example.com"
 
     now = datetime.now(
         timezone.utc
     ).replace(tzinfo=None)
 
-    audit.start_run(
+    # --------------------------------------------------
+    # Create parent run
+    # --------------------------------------------------
+    audit_repository.start_run(
         RunContext(
             run_id=run_id,
             dag_id="integration_test",
@@ -58,6 +66,9 @@ def test_load_valid_and_invalid_records():
         )
     )
 
+    # --------------------------------------------------
+    # Register test file
+    # --------------------------------------------------
     remote_file = RemoteFileMetadata(
         file_name="report_999.txt",
         remote_path=(
@@ -66,13 +77,18 @@ def test_load_valid_and_invalid_records():
         size_bytes=100,
     )
 
-    file_id = audit.register_file(
-        run_id=run_id,
-        remote_file=remote_file,
+    file_id = (
+        audit_repository.register_file(
+            run_id=run_id,
+            remote_file=remote_file,
+        )
     )
 
+    # --------------------------------------------------
+    # One valid record
+    # --------------------------------------------------
     valid_record = VisitRecord(
-        email="valid@example.com",
+        email=unique_email,
         jyv=None,
         badmail=None,
         baja=None,
@@ -97,6 +113,9 @@ def test_load_valid_and_invalid_records():
         source_line=2,
     )
 
+    # --------------------------------------------------
+    # One invalid record
+    # --------------------------------------------------
     invalid_record = RecordError(
         line_number=3,
         email="invalid@@example.com",
@@ -122,19 +141,203 @@ def test_load_valid_and_invalid_records():
         )
     )
 
+    # --------------------------------------------------
+    # Execute transactional business load
+    # --------------------------------------------------
     loader = LoadService(
-        connection_factory=factory,
+        connection_factory=(
+            connection_factory
+        ),
         repository=(
             BusinessLoadRepository()
         ),
     )
 
-    result = loader.load_details(
+    load_result = loader.load_file(
         file_id=file_id,
         run_id=run_id,
         file_name="report_999.txt",
         records=processing_result,
+        reference_date=date(
+            2013,
+            2,
+            15,
+        ),
     )
 
-    assert result.statistics_inserted == 1
-    assert result.errors_inserted == 1
+    # --------------------------------------------------
+    # Validate returned metrics
+    # --------------------------------------------------
+    assert (
+        load_result.statistics_inserted
+        == 1
+    )
+
+    assert (
+        load_result.errors_inserted
+        == 1
+    )
+
+    assert (
+        load_result.visitors_inserted
+        == 1
+    )
+
+    assert (
+        load_result.visitors_updated
+        == 0
+    )
+
+    assert (
+        load_result.records_loaded
+        == 1
+    )
+
+    # --------------------------------------------------
+    # Validate persisted database state
+    # --------------------------------------------------
+    with (
+        connection_factory.connection()
+        as connection
+    ):
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM estadistica
+                WHERE file_id = %s
+                """,
+                (file_id,),
+            )
+
+            statistics_row = (
+                cursor.fetchone()
+            )
+
+            assert (
+                statistics_row["total"]
+                == 1
+            )
+
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM errores
+                WHERE file_id = %s
+                """,
+                (file_id,),
+            )
+
+            errors_row = (
+                cursor.fetchone()
+            )
+
+            assert (
+                errors_row["total"]
+                == 1
+            )
+
+            cursor.execute(
+                """
+                SELECT
+                    email,
+                    fecha_primera_visita,
+                    fecha_ultima_visita,
+                    visitas_totales,
+                    visitas_anio_actual,
+                    visitas_mes_actual
+                FROM visitante
+                WHERE email = %s
+                """,
+                (unique_email,),
+            )
+
+            visitor_row = (
+                cursor.fetchone()
+            )
+
+            assert visitor_row is not None
+
+            assert (
+                visitor_row["email"]
+                == unique_email
+            )
+
+            assert (
+                visitor_row[
+                    "fecha_primera_visita"
+                ].isoformat()
+                == "2013-02-08"
+            )
+
+            assert (
+                visitor_row[
+                    "fecha_ultima_visita"
+                ].isoformat()
+                == "2013-02-08"
+            )
+
+            assert (
+                visitor_row[
+                    "visitas_totales"
+                ]
+                == 1
+            )
+
+            assert (
+                visitor_row[
+                    "visitas_anio_actual"
+                ]
+                == 1
+            )
+
+            assert (
+                visitor_row[
+                    "visitas_mes_actual"
+                ]
+                == 1
+            )
+
+            cursor.execute(
+                """
+                SELECT
+                    status,
+                    records_loaded,
+                    visitors_inserted,
+                    visitors_updated
+                FROM etl_file_control
+                WHERE file_id = %s
+                """,
+                (file_id,),
+            )
+
+            file_control_row = (
+                cursor.fetchone()
+            )
+
+            assert (
+                file_control_row["status"]
+                == "LOADED"
+            )
+
+            assert (
+                file_control_row[
+                    "records_loaded"
+                ]
+                == 1
+            )
+
+            assert (
+                file_control_row[
+                    "visitors_inserted"
+                ]
+                == 1
+            )
+
+            assert (
+                file_control_row[
+                    "visitors_updated"
+                ]
+                == 0
+            )

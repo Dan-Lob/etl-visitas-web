@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
 from etl_visitas.config.settings import AppSettings
@@ -15,11 +15,17 @@ from etl_visitas.models.enums import (
 from etl_visitas.repositories.audit_repository import (
     AuditRepository,
 )
+from etl_visitas.repositories.business_load_repository import (
+    BusinessLoadRepository,
+)
 from etl_visitas.repositories.mysql_connection import (
     MySQLConnectionFactory,
 )
 from etl_visitas.services.file_processing_service import (
     FileProcessingService,
+)
+from etl_visitas.services.load_service import (
+    LoadService,
 )
 
 
@@ -31,42 +37,39 @@ class ControlledIngestionService:
     ) -> None:
         self._settings = settings
 
-        connection_factory = MySQLConnectionFactory(
-            settings.mysql
+        self._connection_factory = (
+            MySQLConnectionFactory(
+                settings.mysql
+            )
         )
 
-        self._audit_repository = AuditRepository(
-            connection_factory
+        self._audit_repository = (
+            AuditRepository(
+                self._connection_factory
+            )
         )
 
-        self._file_processor = FileProcessingService(
-            settings
+        self._file_processor = (
+            FileProcessingService(
+                settings
+            )
+        )
+
+        self._load_service = LoadService(
+            connection_factory=(
+                self._connection_factory
+            ),
+            repository=(
+                BusinessLoadRepository()
+            ),
         )
 
     def run(
         self,
         run_id: str | None = None,
         dag_id: str = "etl_visitas_daily",
+        reference_date: date | None = None,
     ) -> str:
-        """
-        Executes the controlled ingestion flow.
-
-        Current scope:
-        - Starts ETL run audit.
-        - Connects to SFTP.
-        - Discovers report_<n>.txt files.
-        - Registers each file in etl_file_control.
-        - Downloads/stages each file.
-        - Calculates and persists checksum.
-        - Detects already successfully processed content.
-        - Validates file layout.
-        - Validates and normalizes records.
-        - Persists per-file metrics/status.
-        - Consolidates run metrics.
-        - Finishes the run.
-
-        Business-table loading is intentionally not included yet.
-        """
 
         actual_run_id = (
             run_id
@@ -77,6 +80,12 @@ class ControlledIngestionService:
         now = datetime.now(
             timezone.utc
         ).replace(tzinfo=None)
+
+        effective_reference_date = (
+            reference_date
+            if reference_date is not None
+            else date.today()
+        )
 
         run_context = RunContext(
             run_id=actual_run_id,
@@ -124,22 +133,17 @@ class ControlledIngestionService:
                             )
                         )
 
-                        # -------------------------------------
-                        # File was downloaded/staged correctly.
-                        # Persist size, SHA-256 and STAGED state.
-                        # -------------------------------------
+                        # ---------------------------------
+                        # STAGED
+                        # ---------------------------------
                         self._audit_repository.update_file_staged(
                             file_id=file_id,
                             staged_file=result.staged_file,
                         )
 
-                        # -------------------------------------
-                        # Idempotency control.
-                        #
-                        # A previously LOADED/BACKED_UP/SUCCESS
-                        # file with the same content must not
-                        # be processed again.
-                        # -------------------------------------
+                        # ---------------------------------
+                        # Idempotency by checksum
+                        # ---------------------------------
                         existing_file = (
                             self._audit_repository
                             .get_successful_file_by_checksum(
@@ -149,47 +153,38 @@ class ControlledIngestionService:
                             )
                         )
 
-                        if existing_file is not None:
-                            # Important:
-                            # get_successful_file_by_checksum()
-                            # can potentially find the current
-                            # file in future stages, so protect
-                            # against self-matching.
-                            if (
-                                existing_file.file_id
-                                != file_id
-                            ):
-                                self._audit_repository.update_file_status(
-                                    file_id=file_id,
-                                    status=(
-                                        FileStatus
-                                        .SKIPPED_ALREADY_PROCESSED
-                                    ),
-                                    error_code=(
-                                        ErrorCode
-                                        .ALREADY_PROCESSED
-                                        .value
-                                    ),
-                                    error_message=(
-                                        "File content was "
-                                        "already processed "
-                                        "successfully. "
-                                        f"Original file_id="
-                                        f"{existing_file.file_id}, "
-                                        f"original run_id="
-                                        f"{existing_file.run_id}"
-                                    ),
-                                )
+                        if (
+                            existing_file is not None
+                            and
+                            existing_file.file_id
+                            != file_id
+                        ):
+                            self._audit_repository.update_file_status(
+                                file_id=file_id,
+                                status=(
+                                    FileStatus
+                                    .SKIPPED_ALREADY_PROCESSED
+                                ),
+                                error_code=(
+                                    ErrorCode
+                                    .ALREADY_PROCESSED
+                                    .value
+                                ),
+                                error_message=(
+                                    "File content was already "
+                                    "processed successfully. "
+                                    f"Original file_id="
+                                    f"{existing_file.file_id}, "
+                                    f"original run_id="
+                                    f"{existing_file.run_id}"
+                                ),
+                            )
 
-                                continue
+                            continue
 
-                        # -------------------------------------
-                        # Structural file rejection.
-                        #
-                        # This is a data-quality condition, not
-                        # a technical exception. No retry is
-                        # required.
-                        # -------------------------------------
+                        # ---------------------------------
+                        # Structural rejection
+                        # ---------------------------------
                         if (
                             result.status
                             == FileStatus.REJECTED_LAYOUT
@@ -221,9 +216,6 @@ class ControlledIngestionService:
                                 ),
                             )
 
-                            # Do not overwrite FAILED if a
-                            # previous file already had a
-                            # technical failure.
                             if (
                                 run_status
                                 != RunStatus.FAILED
@@ -235,10 +227,10 @@ class ControlledIngestionService:
 
                             continue
 
-                        # -------------------------------------
-                        # A structurally valid file must have
-                        # its record-processing result.
-                        # -------------------------------------
+                        # ---------------------------------
+                        # Valid file must have processed
+                        # records.
+                        # ---------------------------------
                         if result.records is None:
                             raise RuntimeError(
                                 "Prepared file has no "
@@ -247,14 +239,6 @@ class ControlledIngestionService:
                                 f"{remote_file.file_name}"
                             )
 
-                        # -------------------------------------
-                        # Reconciliation control.
-                        #
-                        # Every row read must end in exactly
-                        # one of:
-                        # - valid
-                        # - invalid
-                        # -------------------------------------
                         records_read = (
                             result.records.records_read
                         )
@@ -267,25 +251,26 @@ class ControlledIngestionService:
                             result.records.records_invalid
                         )
 
+                        # ---------------------------------
+                        # Input reconciliation
+                        # ---------------------------------
                         if (
                             records_read
                             != records_valid
                             + records_invalid
                         ):
                             raise RuntimeError(
-                                "Record reconciliation "
-                                "failed. "
+                                "Record reconciliation failed. "
                                 f"File="
                                 f"{remote_file.file_name}, "
                                 f"read={records_read}, "
                                 f"valid={records_valid}, "
-                                f"invalid="
-                                f"{records_invalid}"
+                                f"invalid={records_invalid}"
                             )
 
-                        # -------------------------------------
-                        # Persist validation metrics.
-                        # -------------------------------------
+                        # ---------------------------------
+                        # Persist validation metrics
+                        # ---------------------------------
                         self._audit_repository.update_file_metrics(
                             file_id=file_id,
                             records_read=records_read,
@@ -293,21 +278,55 @@ class ControlledIngestionService:
                             records_invalid=records_invalid,
                         )
 
-                        # -------------------------------------
-                        # The file is ready for the next phase:
-                        # transactional MySQL business loading.
-                        # -------------------------------------
+                        # ---------------------------------
+                        # PREPARED
+                        # ---------------------------------
                         self._audit_repository.update_file_status(
                             file_id=file_id,
                             status=FileStatus.PREPARED,
                         )
 
-                        # Record-level invalid data does not
-                        # technically fail the file, but it
-                        # should be visible in the overall run.
+                        # ---------------------------------
+                        # LOADING
+                        # ---------------------------------
+                        self._audit_repository.update_file_status(
+                            file_id=file_id,
+                            status=FileStatus.LOADING,
+                        )
+
+                        # ---------------------------------
+                        # Transactional business load:
+                        #
+                        # estadistica
+                        # errores
+                        # visitante
+                        # file_control → LOADED
+                        #
+                        # all in one transaction
+                        # ---------------------------------
+                        self._load_service.load_file(
+                            file_id=file_id,
+                            run_id=actual_run_id,
+                            file_name=(
+                                remote_file.file_name
+                            ),
+                            records=result.records,
+                            reference_date=(
+                                effective_reference_date
+                            ),
+                        )
+
+                        # No update_file_status(LOADED)
+                        # here.
+                        #
+                        # LoadService / repository already
+                        # updates etl_file_control to LOADED
+                        # inside the SAME DB transaction.
+
                         if (
                             records_invalid > 0
-                            and run_status
+                            and
+                            run_status
                             != RunStatus.FAILED
                         ):
                             run_status = (
@@ -315,13 +334,6 @@ class ControlledIngestionService:
                             )
 
                     except Exception as error:
-                        # -------------------------------------
-                        # Technical failure isolated to one
-                        # file.
-                        #
-                        # Other candidate files are allowed to
-                        # continue processing.
-                        # -------------------------------------
                         self._audit_repository.update_file_status(
                             file_id=file_id,
                             status=FileStatus.FAILED,
@@ -333,12 +345,13 @@ class ControlledIngestionService:
                             error_message=str(error),
                         )
 
-                        run_status = RunStatus.FAILED
+                        run_status = (
+                            RunStatus.FAILED
+                        )
 
-            # ---------------------------------------------
-            # Consolidate per-file counters into run-level
-            # metrics before closing the execution.
-            # ---------------------------------------------
+            # -------------------------------------
+            # Aggregate file metrics into run
+            # -------------------------------------
             self._audit_repository.update_run_metrics(
                 actual_run_id
             )
@@ -351,11 +364,6 @@ class ControlledIngestionService:
             return actual_run_id
 
         except Exception:
-            # ---------------------------------------------
-            # Global failure:
-            # SFTP connection failure, discovery failure,
-            # unexpected orchestration-level exception, etc.
-            # ---------------------------------------------
             try:
                 self._audit_repository.update_run_metrics(
                     actual_run_id
