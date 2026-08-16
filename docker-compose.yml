@@ -140,6 +140,7 @@ services:
       SFTP_REMOTE_PATH: ${SFTP_REMOTE_PATH}
 
       ETL_STAGING_PATH: ${ETL_STAGING_PATH}
+      ETL_BACKUP_PATH: ${ETL_BACKUP_PATH}
 
     ports:
       - "8080:8080"

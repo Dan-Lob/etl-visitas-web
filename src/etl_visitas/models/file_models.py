@@ -27,3 +27,10 @@ class FileValidationResult:
     is_valid: bool
     error_code: ErrorCode | None = None
     error_message: str | None = None
+
+@dataclass(frozen=True)
+class BackupFile:
+    source_file_name: str
+    backup_path: str
+    size_bytes: int
+    checksum_sha256: str
