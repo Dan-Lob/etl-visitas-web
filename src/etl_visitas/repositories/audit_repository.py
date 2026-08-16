@@ -458,3 +458,80 @@ class AuditRepository:
                 except Exception:
                     connection.rollback()
                     raise
+
+    def update_file_backed_up(
+        self,
+        file_id: int,
+        backup_path: str,
+    ) -> None:
+
+        sql = """
+        UPDATE etl_file_control
+        SET
+            backup_at = CURRENT_TIMESTAMP,
+            backup_uri = %s,
+            status = %s
+        WHERE file_id = %s
+        """
+
+        with (
+            self._connection_factory
+            .connection()
+            as connection
+        ):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        sql,
+                        (
+                            backup_path,
+                            FileStatus
+                            .BACKED_UP
+                            .value,
+                            file_id,
+                        ),
+                    )
+
+                connection.commit()
+
+            except Exception:
+                connection.rollback()
+                raise
+
+
+    def mark_source_deleted(
+        self,
+        file_id: int,
+    ) -> None:
+
+        sql = """
+        UPDATE etl_file_control
+        SET
+            source_deleted_at =
+                CURRENT_TIMESTAMP,
+            status = %s
+        WHERE file_id = %s
+        """
+
+        with (
+            self._connection_factory
+            .connection()
+            as connection
+        ):
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        sql,
+                        (
+                            FileStatus
+                            .SUCCESS
+                            .value,
+                            file_id,
+                        ),
+                    )
+
+                connection.commit()
+
+            except Exception:
+                connection.rollback()
+                raise

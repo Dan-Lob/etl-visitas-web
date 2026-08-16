@@ -21,6 +21,9 @@ from etl_visitas.repositories.business_load_repository import (
 from etl_visitas.repositories.mysql_connection import (
     MySQLConnectionFactory,
 )
+from etl_visitas.services.backup_service import (
+    BackupService,
+)
 from etl_visitas.services.file_processing_service import (
     FileProcessingService,
 )
@@ -62,6 +65,10 @@ class ControlledIngestionService:
             repository=(
                 BusinessLoadRepository()
             ),
+        )
+
+        self._backup_service = BackupService(
+            settings.storage
         )
 
     def run(
@@ -133,17 +140,11 @@ class ControlledIngestionService:
                             )
                         )
 
-                        # ---------------------------------
-                        # STAGED
-                        # ---------------------------------
                         self._audit_repository.update_file_staged(
                             file_id=file_id,
                             staged_file=result.staged_file,
                         )
 
-                        # ---------------------------------
-                        # Idempotency by checksum
-                        # ---------------------------------
                         existing_file = (
                             self._audit_repository
                             .get_successful_file_by_checksum(
@@ -155,8 +156,7 @@ class ControlledIngestionService:
 
                         if (
                             existing_file is not None
-                            and
-                            existing_file.file_id
+                            and existing_file.file_id
                             != file_id
                         ):
                             self._audit_repository.update_file_status(
@@ -182,9 +182,6 @@ class ControlledIngestionService:
 
                             continue
 
-                        # ---------------------------------
-                        # Structural rejection
-                        # ---------------------------------
                         if (
                             result.status
                             == FileStatus.REJECTED_LAYOUT
@@ -227,10 +224,6 @@ class ControlledIngestionService:
 
                             continue
 
-                        # ---------------------------------
-                        # Valid file must have processed
-                        # records.
-                        # ---------------------------------
                         if result.records is None:
                             raise RuntimeError(
                                 "Prepared file has no "
@@ -251,9 +244,6 @@ class ControlledIngestionService:
                             result.records.records_invalid
                         )
 
-                        # ---------------------------------
-                        # Input reconciliation
-                        # ---------------------------------
                         if (
                             records_read
                             != records_valid
@@ -268,9 +258,6 @@ class ControlledIngestionService:
                                 f"invalid={records_invalid}"
                             )
 
-                        # ---------------------------------
-                        # Persist validation metrics
-                        # ---------------------------------
                         self._audit_repository.update_file_metrics(
                             file_id=file_id,
                             records_read=records_read,
@@ -278,32 +265,16 @@ class ControlledIngestionService:
                             records_invalid=records_invalid,
                         )
 
-                        # ---------------------------------
-                        # PREPARED
-                        # ---------------------------------
                         self._audit_repository.update_file_status(
                             file_id=file_id,
                             status=FileStatus.PREPARED,
                         )
 
-                        # ---------------------------------
-                        # LOADING
-                        # ---------------------------------
                         self._audit_repository.update_file_status(
                             file_id=file_id,
                             status=FileStatus.LOADING,
                         )
 
-                        # ---------------------------------
-                        # Transactional business load:
-                        #
-                        # estadistica
-                        # errores
-                        # visitante
-                        # file_control → LOADED
-                        #
-                        # all in one transaction
-                        # ---------------------------------
                         self._load_service.load_file(
                             file_id=file_id,
                             run_id=actual_run_id,
@@ -316,17 +287,76 @@ class ControlledIngestionService:
                             ),
                         )
 
-                        # No update_file_status(LOADED)
-                        # here.
-                        #
-                        # LoadService / repository already
-                        # updates etl_file_control to LOADED
-                        # inside the SAME DB transaction.
+                        try:
+                            backup_file = (
+                                self._backup_service
+                                .create_backup(
+                                    staged_file=(
+                                        result.staged_file
+                                    ),
+                                    run_id=(
+                                        actual_run_id
+                                    ),
+                                )
+                            )
+
+                        except Exception as error:
+                            self._audit_repository.update_file_status(
+                                file_id=file_id,
+                                status=(
+                                    FileStatus
+                                    .PENDING_BACKUP
+                                ),
+                                error_code=(
+                                    ErrorCode
+                                    .BACKUP_ERROR
+                                    .value
+                                ),
+                                error_message=str(error),
+                            )
+
+                            run_status = RunStatus.FAILED
+
+                            continue
+
+                        self._audit_repository.update_file_backed_up(
+                            file_id=file_id,
+                            backup_path=(
+                                backup_file.backup_path
+                            ),
+                        )
+
+                        try:
+                            sftp_client.delete(
+                                remote_file.remote_path
+                            )
+
+                        except Exception as error:
+                            self._audit_repository.update_file_status(
+                                file_id=file_id,
+                                status=(
+                                    FileStatus
+                                    .PENDING_SOURCE_DELETE
+                                ),
+                                error_code=(
+                                    ErrorCode
+                                    .SFTP_DELETE_ERROR
+                                    .value
+                                ),
+                                error_message=str(error),
+                            )
+
+                            run_status = RunStatus.FAILED
+
+                            continue
+
+                        self._audit_repository.mark_source_deleted(
+                            file_id=file_id
+                        )
 
                         if (
                             records_invalid > 0
-                            and
-                            run_status
+                            and run_status
                             != RunStatus.FAILED
                         ):
                             run_status = (
@@ -345,13 +375,8 @@ class ControlledIngestionService:
                             error_message=str(error),
                         )
 
-                        run_status = (
-                            RunStatus.FAILED
-                        )
+                        run_status = RunStatus.FAILED
 
-            # -------------------------------------
-            # Aggregate file metrics into run
-            # -------------------------------------
             self._audit_repository.update_run_metrics(
                 actual_run_id
             )
