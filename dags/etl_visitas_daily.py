@@ -4,10 +4,17 @@ from datetime import date, timedelta
 
 import pendulum
 
-from airflow.sdk import dag, task
+from airflow.sdk import (
+    dag,
+    get_current_context,
+    task,
+)
 from airflow.utils.trigger_rule import TriggerRule
 
-from etl_visitas.config.settings import load_settings
+from etl_visitas.config.settings import (
+    load_airflow_settings,
+    load_settings,
+)
 from etl_visitas.repositories.audit_repository import (
     AuditRepository,
 )
@@ -20,33 +27,38 @@ from etl_visitas.services.controlled_ingestion_service import (
 from etl_visitas.operations.run_summary_service import (
     RunSummaryService,
 )
-
 from etl_visitas.operations.alert_service import (
     AlertService,
 )
 
+
 DAG_ID = "etl_visitas_daily"
+
+DAG_SETTINGS = (
+    load_airflow_settings()
+)
+
+DAG_TIMEZONE = (
+    DAG_SETTINGS.timezone
+)
+
+DAG_SCHEDULE = (
+    DAG_SETTINGS.schedule
+)
 
 
 @dag(
     dag_id=DAG_ID,
-
-    # Por ahora la ejecución es manual.
-    # El schedule diario se habilitará después
-    # de validar completamente el flujo local.
-    schedule=None,
+    schedule=DAG_SCHEDULE,
 
     start_date=pendulum.datetime(
         2026,
         8,
         1,
-        tz="America/Mexico_City",
+        tz=DAG_TIMEZONE,
     ),
 
     catchup=False,
-
-    # Evita que dos ejecuciones del mismo DAG
-    # compitan simultáneamente por los archivos SFTP.
     max_active_runs=1,
 
     default_args={
@@ -262,19 +274,24 @@ def etl_visitas_daily():
             f"{file_name}"
         )
 
+        context = get_current_context()
+
+        logical_date = context.get(
+            "logical_date"
+        )
+
+        if logical_date is not None:
+            reference_date = (
+                logical_date.date()
+            )
+        else:
+            reference_date = date.today()
+
         status = (
             service.process_single_file(
                 run_id=etl_run_id,
                 file_data=file_data,
-
-                # Temporal mientras se confirma
-                # definitivamente la regla de negocio
-                # para los datos históricos recibidos.
-                reference_date=date(
-                    2013,
-                    2,
-                    15,
-                ),
+                reference_date=reference_date,
             )
         )
 
