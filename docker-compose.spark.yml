@@ -11,6 +11,7 @@ services:
 
     environment:
       SPARK_LOCAL_IP: 127.0.0.1
+      SPARK_MASTER: "local[*]"
 
     volumes:
       - ./bigdata:/app/bigdata

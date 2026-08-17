@@ -15,7 +15,7 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
-
+import os
 
 DATE_FORMAT = "dd/MM/yyyy HH:mm"
 
@@ -159,18 +159,28 @@ def parse_arguments():
 
 
 def create_spark_session() -> SparkSession:
-    return (
+
+    builder = (
         SparkSession.builder
         .appName(
             "etl-visitas-pyspark"
         )
-        .master("local[*]")
         .config(
             "spark.sql.session.timeZone",
             "America/Mexico_City",
         )
-        .getOrCreate()
     )
+
+    spark_master = os.getenv(
+        "SPARK_MASTER"
+    )
+
+    if spark_master:
+        builder = builder.master(
+            spark_master
+        )
+
+    return builder.getOrCreate()
 
 
 def read_source(
@@ -438,27 +448,27 @@ def normalize_source(
         # ------------------------------------------
         .withColumn(
             "opens",
-            F.col(
-                "opens_raw"
-            ).try_cast("long"),
+            F.expr(
+                "try_cast(opens_raw AS BIGINT)"
+            ),
         )
         .withColumn(
             "opens_virales",
-            F.col(
-                "opens_virales_raw"
-            ).try_cast("long"),
+            F.expr(
+                "try_cast(opens_virales_raw AS BIGINT)"
+            ),
         )
         .withColumn(
             "clicks",
-            F.col(
-                "clicks_raw"
-            ).try_cast("long"),
+            F.expr(
+                "try_cast(clicks_raw AS BIGINT)"
+            ),
         )
         .withColumn(
             "clicks_virales",
-            F.col(
-                "clicks_virales_raw"
-            ).try_cast("long"),
+            F.expr(
+                "try_cast(clicks_virales_raw AS BIGINT)"
+            ),
         )
         # ------------------------------------------
         # Stable record identifier
