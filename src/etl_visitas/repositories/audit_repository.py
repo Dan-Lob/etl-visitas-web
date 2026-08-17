@@ -535,3 +535,34 @@ class AuditRepository:
             except Exception:
                 connection.rollback()
                 raise
+
+
+    def get_file_statuses(
+        self,
+        run_id: str,
+    ) -> list[str]:
+
+        sql = """
+        SELECT status
+        FROM etl_file_control
+        WHERE run_id = %s
+        ORDER BY file_id
+        """
+
+        with (
+            self._connection_factory
+            .connection()
+            as connection
+        ):
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    sql,
+                    (run_id,),
+                )
+
+                rows = cursor.fetchall()
+
+        return [
+            row["status"]
+            for row in rows
+        ]            
