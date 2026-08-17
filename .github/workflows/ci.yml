@@ -15,6 +15,9 @@ jobs:
     name: Test ETL
     runs-on: ubuntu-latest
 
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -39,6 +42,10 @@ jobs:
             echo ".env must not be committed"
             exit 1
           fi
+
+      - name: Verify application package import
+        run: |
+          python -c "import etl_visitas; print('etl_visitas import OK')"
 
       - name: Compile Python source
         run: |
