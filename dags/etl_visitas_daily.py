@@ -17,7 +17,13 @@ from etl_visitas.repositories.mysql_connection import (
 from etl_visitas.services.controlled_ingestion_service import (
     ControlledIngestionService,
 )
+from etl_visitas.operations.run_summary_service import (
+    RunSummaryService,
+)
 
+from etl_visitas.operations.alert_service import (
+    AlertService,
+)
 
 DAG_ID = "etl_visitas_daily"
 
@@ -322,6 +328,47 @@ def etl_visitas_daily():
         return etl_run_id
 
     # ==================================================
+    # EMIT OPERATIONAL ALERTS
+    # ==================================================
+
+    @task(
+        task_id="emit_alerts",
+        retries=0,
+    )
+    def emit_alerts(
+        etl_run_id: str,
+    ) -> str:
+        """
+        Evaluates the final file states and emits
+        operational alerts when attention is required.
+        """
+
+        settings = load_settings()
+
+        connection_factory = (
+            MySQLConnectionFactory(
+                settings.mysql
+            )
+        )
+
+        alert_service = AlertService(
+            connection_factory
+        )
+
+        alerts = (
+            alert_service.emit_run_alerts(
+                etl_run_id
+            )
+        )
+
+        print(
+            "Operational alert evaluation "
+            f"completed. alerts={len(alerts)}"
+        )
+
+        return etl_run_id
+
+    # ==================================================
     # VALIDATE RUN
     # ==================================================
 
@@ -383,6 +430,50 @@ def etl_visitas_daily():
             f"status={status}"
         )
 
+        summary_service = RunSummaryService(
+            MySQLConnectionFactory(
+                settings.mysql
+            )
+        )
+
+        summary = summary_service.get_run_summary(
+            etl_run_id
+        )
+
+        print(
+            "ETL operational summary:"
+        )
+
+        print(
+            f"files_detected="
+            f"{summary['files_detected']}"
+        )
+
+        print(
+            f"files_success="
+            f"{summary['files_success']}"
+        )
+
+        print(
+            f"files_rejected="
+            f"{summary['files_rejected']}"
+        )
+
+        print(
+            f"files_failed="
+            f"{summary['files_failed']}"
+        )
+
+        print(
+            f"records_read="
+            f"{summary['records_read']}"
+        )
+
+        print(
+            f"records_loaded="
+            f"{summary['records_loaded']}"
+        )
+
     # ==================================================
     # DAG GRAPH
     # ==================================================
@@ -419,13 +510,16 @@ def etl_visitas_daily():
         )
     )
 
-    # finalize_run uses ALL_DONE, so it must depend
-    # explicitly on all mapped process_file instances.
     mapped_results >> finalized_run_id
 
-    validate_run(
-        finalized_run_id
+    alerted_run_id = (
+        emit_alerts(
+            finalized_run_id
+        )
     )
 
+    validate_run(
+        alerted_run_id
+    )
 
 etl_visitas_daily()
