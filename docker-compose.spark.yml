@@ -1,0 +1,19 @@
+services:
+
+  spark-poc:
+    build:
+      context: .
+      dockerfile: bigdata/Dockerfile.spark
+
+    container_name: etl_spark_poc
+
+    working_dir: /app
+
+    environment:
+      SPARK_LOCAL_IP: 127.0.0.1
+
+    volumes:
+      - ./bigdata:/app/bigdata
+      - ./data/sample:/app/input:ro
+      - ./data/pyspark-output:/app/output
+      - ./data/pyspark-output-invalid:/app/output-invalid
