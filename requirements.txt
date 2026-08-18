@@ -5,3 +5,7 @@ PyYAML
 
 apache-airflow-providers-mysql
 apache-airflow-providers-sftp
+pytest
+
+google-cloud-secret-manager
+apache-airflow-providers-google

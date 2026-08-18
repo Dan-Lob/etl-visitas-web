@@ -1,0 +1,5 @@
+email,jyv,Badmail,Baja,Fecha envio,Fecha open,Opens,Opens virales,Fecha click,Clicks,Clicks virales,Links,IPs,Navegadores,Plataformas
+usuario.valido@example.com,,,,08/02/2013 18:30,-,1,0,-,0,0,-,-,-,-
+email_invalido,,,,08/02/2013 18:30,-,1,0,-,0,0,-,-,-,-
+fecha.invalida@example.com,,,,99/99/2013 18:30,-,1,0,-,0,0,-,-,-,-
+numero.invalido@example.com,,,,08/02/2013 18:30,-,ABC,0,-,0,0,-,-,-,-

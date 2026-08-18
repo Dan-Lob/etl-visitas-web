@@ -139,6 +139,17 @@ services:
       SFTP_PASSWORD: ${SFTP_PASSWORD}
       SFTP_REMOTE_PATH: ${SFTP_REMOTE_PATH}
 
+      ETL_STAGING_PATH: ${ETL_STAGING_PATH}
+      ETL_BACKUP_PATH: ${ETL_BACKUP_PATH}
+
+      GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/gcp/application_default_credentials.json
+      AIRFLOW_CONN_GOOGLE_CLOUD_DEFAULT: "google-cloud-platform://"
+
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      GCP_REGION: ${GCP_REGION}
+      GCS_BUCKET: ${GCS_BUCKET}
+      BQ_DATASET: ${BQ_DATASET}
+
     ports:
       - "8080:8080"
 
@@ -149,6 +160,8 @@ services:
       - ./data:/opt/airflow/data
       - ./config:/opt/airflow/config
       - ./scripts:/opt/airflow/scripts
+      - ./tests:/opt/airflow/tests
+      - ${GCP_ADC_PATH}:/opt/airflow/gcp/application_default_credentials.json:ro
 
     command: standalone
 
